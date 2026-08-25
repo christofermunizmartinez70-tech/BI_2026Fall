@@ -12,15 +12,23 @@ warnings.filterwarnings('ignore')
 # Configuración de la página
 st.set_page_config(page_title="StatsBomb Pass Visualizer", layout="wide")
 
-st.title("⚽ Visualizador de Pases - Copa del Mundo Qatar 2022")
+st.title("⚽ Visualizador de Pases - Copa Mundial de la FIFA")
 
 # ---------------------------------------------------------
-# Carga de datos con Caché para optimizar el rendimiento
+# Carga de Competiciones y Partidos con Caché
 # ---------------------------------------------------------
 @st.cache_data
-def load_matches():
-    # Cargar todos los partidos de Qatar 2022 (competition_id=43, season_id=106)
-    matches = sb.matches(competition_id=43, season_id=106)
+def get_world_cup_editions():
+    # Obtener todas las competiciones disponibles en StatsBomb
+    comps = sb.competitions()
+    # Filtrar únicamente las ediciones de Copa del Mundo Masculina
+    wc_comps = comps[comps['competition_name'] == 'FIFA World Cup'].sort_values(by='season_name', ascending=False)
+    return wc_comps
+
+@st.cache_data
+def load_matches(comp_id, season_id):
+    # Cargar los partidos de la edición seleccionada
+    matches = sb.matches(competition_id=comp_id, season_id=season_id)
     return matches
 
 @st.cache_data
@@ -29,32 +37,45 @@ def load_events(match_id):
     events = sb.events(match_id=match_id)
     return events
 
-wc_2022 = load_matches()
-
 # ---------------------------------------------------------
-# Barra lateral: Selector de Partido del Mundial
+# Barra Lateral: Selección de Edición y Partido
 # ---------------------------------------------------------
-st.sidebar.header("🎯 Selección de Partido")
+st.sidebar.header("🏆 Seleccionar Mundial")
 
-# 1. Filtro opcional por Fase del Torneo
-stages = ["Todas las Fases"] + sorted(wc_2022['competition_stage'].unique().tolist())
+wc_editions = get_world_cup_editions()
+
+# Diccionario para mapear el nombre de la edición (ej. "2022", "2018") con (competition_id, season_id)
+edition_options = {
+    f"Copa del Mundo {row['season_name']}": (row['competition_id'], row['season_id'])
+    for _, row in wc_editions.iterrows()
+}
+
+selected_edition_name = st.sidebar.selectbox("Edición del Mundial:", list(edition_options.keys()))
+comp_id, season_id = edition_options[selected_edition_name]
+
+# Cargar los partidos correspondientes a la edición elegida
+matches = load_matches(comp_id, season_id)
+
+st.sidebar.header("🎯 Seleccionar Partido")
+
+# Filtro por Fase del Torneo (Opcional)
+stages = ["Todas las Fases"] + sorted(matches['competition_stage'].unique().tolist())
 selected_stage = st.sidebar.selectbox("Fase del torneo:", stages)
 
 if selected_stage != "Todas las Fases":
-    filtered_matches = wc_2022[wc_2022['competition_stage'] == selected_stage]
+    filtered_matches = matches[matches['competition_stage'] == selected_stage]
 else:
-    filtered_matches = wc_2022.copy()
+    filtered_matches = matches.copy()
 
-# Ordenar los partidos por fecha
 filtered_matches = filtered_matches.sort_values(by='match_date')
 
-# 2. Selector de Partido (Muestra: Equipo Local vs Equipo Visitante - Fecha)
+# Desplegable de Partidos de esa edición
 match_options = {
     f"{row['home_team']} {row['home_score']} - {row['away_score']} {row['away_team']} ({row['match_date']})": row['match_id']
     for _, row in filtered_matches.iterrows()
 }
 
-selected_match_label = st.sidebar.selectbox("Selecciona un partido:", list(match_options.keys()))
+selected_match_label = st.sidebar.selectbox("Partido:", list(match_options.keys()))
 match_id = match_options[selected_match_label]
 
 # Cargar eventos del partido elegido
@@ -90,18 +111,19 @@ minuto = st.sidebar.slider("Minuto del partido:", min_value=0, max_value=max_min
 teams_in_match = sorted(final['team'].dropna().unique().tolist())
 selected_team_filter = st.sidebar.radio("Mostrar pases de:", ["Ambos equipos"] + teams_in_match)
 
-# Filtrar dataset final
+# Filtrar dataset final por minuto y equipo
 passes_min = final[final.minute == minuto]
 if selected_team_filter != "Ambos equipos":
     passes_min = passes_min[passes_min.team == selected_team_filter]
 
 # ---------------------------------------------------------
-# Renderizado de la Cancha y Pases
+# Renderizado de la Cancha
 # ---------------------------------------------------------
-st.subheader(f"Pases en el minuto {minuto} — {selected_match_label}")
+st.subheader(f"{selected_edition_name} | {selected_match_label}")
+st.caption(f"Visualizando pases en el minuto **{minuto}**")
 
 if passes_min.empty:
-    st.info(f"No hay pases registrados en el minuto {minuto} para la selección actual.")
+    st.info(f"No hay pases registrados en el minuto {minuto} para los filtros seleccionados.")
 else:
     # Dibujar la cancha con mplsoccer
     pitch = Pitch(pitch_color='#22312b', line_color='#c7d5cc', stripe=False)
@@ -121,13 +143,21 @@ else:
             ax=ax, color=team_color, width=2, headwidth=4, label=team, alpha=0.85
         )
         
-        # Resaltar los puntos de origen del pase
+        # Resaltar puntos de origen
         pitch.scatter(
             team_passes.x0, team_passes.y0,
             ax=ax, color=team_color, s=60, edgecolors='white', zorder=3
         )
 
-    ax.legend(facecolor='#22312b', edgecolor='none', fontsize=10, loc='upper center', bbox_to_anchor=(0.5, 1.05), ncol=2, labelcolor='white')
+    ax.legend(
+        facecolor='#22312b', 
+        edgecolor='none', 
+        fontsize=10, 
+        loc='upper center', 
+        bbox_to_anchor=(0.5, 1.05), 
+        ncol=2, 
+        labelcolor='white'
+    )
     st.pyplot(fig)
 
 # Tabla interactiva desplegable
